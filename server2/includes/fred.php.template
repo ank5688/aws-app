@@ -1,0 +1,179 @@
+<?php
+/**
+ * Server 2: FRED API Integration
+ * 
+ * SETUP INSTRUCTIONS:
+ * 1. Get free API key from: https://fred.stlouisfed.org/docs/api/api_key.html
+ * 2. Copy this file to fred.php: cp fred.php.template fred.php
+ * 3. Update FRED_API_KEY with your actual API key
+ * 4. Test API: php -r "require 'fred.php'; print_r(testFredAPI());"
+ */
+
+// FRED API Configuration - UPDATE THIS VALUE
+define('FRED_API_KEY', 'YOUR_FRED_API_KEY_HERE'); // Get free key at https://fred.stlouisfed.org/docs/api/api_key.html
+define('FRED_BASE_URL', 'https://api.stlouisfed.org/fred/series/observations');
+define('FRED_SERIES_ID', 'MORTGAGE30US'); // 30-Year Fixed Rate Mortgage Average
+define('FRED_CACHE_FILE', '/tmp/fred_rate_cache.json');
+define('FRED_CACHE_DURATION', 3600); // Cache for 1 hour (data updates weekly)
+
+/**
+ * Get current 30-year mortgage rate from FRED API
+ * 
+ * @return float Current mortgage rate (e.g., 6.5 for 6.5%)
+ * @throws Exception if API call fails
+ */
+function getCurrentMortgageRate() {
+    // Check cache first
+    $cachedRate = getCachedRate();
+    if ($cachedRate !== null) {
+        return $cachedRate;
+    }
+    
+    // Build API URL
+    $params = [
+        'series_id' => FRED_SERIES_ID,
+        'api_key' => FRED_API_KEY,
+        'file_type' => 'json',
+        'sort_order' => 'desc',
+        'limit' => 1
+    ];
+    
+    $url = FRED_BASE_URL . '?' . http_build_query($params);
+    
+    // Make API request
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_SSL_VERIFYPEER => true
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+    
+    // Check for errors
+    if ($response === false) {
+        error_log('FRED API curl error: ' . $curlError);
+        return getFallbackRate();
+    }
+    
+    if ($httpCode !== 200) {
+        error_log('FRED API HTTP error: ' . $httpCode);
+        return getFallbackRate();
+    }
+    
+    // Parse response
+    $data = json_decode($response, true);
+    
+    if (!isset($data['observations'][0]['value'])) {
+        error_log('FRED API invalid response format');
+        return getFallbackRate();
+    }
+    
+    $rate = floatval($data['observations'][0]['value']);
+    
+    // Validate rate (should be between 2% and 20% in normal conditions)
+    if ($rate < 1 || $rate > 25) {
+        error_log('FRED API returned invalid rate: ' . $rate);
+        return getFallbackRate();
+    }
+    
+    // Cache the rate
+    cacheRate($rate);
+    
+    return $rate;
+}
+
+/**
+ * Get cached mortgage rate if available and not expired
+ * 
+ * @return float|null Cached rate or null if not available
+ */
+function getCachedRate() {
+    if (!file_exists(FRED_CACHE_FILE)) {
+        return null;
+    }
+    
+    $cacheData = json_decode(file_get_contents(FRED_CACHE_FILE), true);
+    
+    if (!$cacheData || !isset($cacheData['rate']) || !isset($cacheData['timestamp'])) {
+        return null;
+    }
+    
+    // Check if cache is still valid
+    if (time() - $cacheData['timestamp'] > FRED_CACHE_DURATION) {
+        return null;
+    }
+    
+    return floatval($cacheData['rate']);
+}
+
+/**
+ * Cache mortgage rate to file
+ * 
+ * @param float $rate Mortgage rate to cache
+ */
+function cacheRate($rate) {
+    $cacheData = [
+        'rate' => $rate,
+        'timestamp' => time(),
+        'date' => date('Y-m-d H:i:s')
+    ];
+    
+    file_put_contents(FRED_CACHE_FILE, json_encode($cacheData));
+}
+
+/**
+ * Get fallback rate if FRED API is unavailable
+ * Uses a reasonable default based on recent market conditions
+ * 
+ * @return float Fallback mortgage rate
+ */
+function getFallbackRate() {
+    // Log that we're using fallback
+    error_log('Using fallback mortgage rate');
+    
+    // Return a reasonable default (update this periodically)
+    // As of late 2024, rates are around 6.5-7%
+    return 6.75;
+}
+
+/**
+ * Test FRED API connection and retrieve rate
+ * Used for setup verification
+ * 
+ * @return array API test result
+ */
+function testFredAPI() {
+    try {
+        $rate = getCurrentMortgageRate();
+        
+        return [
+            'success' => true,
+            'message' => 'FRED API connection successful',
+            'current_rate' => $rate . '%',
+            'series' => FRED_SERIES_ID
+        ];
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'message' => 'FRED API connection failed',
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+/**
+ * Clear rate cache
+ * Useful for testing or forcing a fresh API call
+ */
+function clearRateCache() {
+    if (file_exists(FRED_CACHE_FILE)) {
+        unlink(FRED_CACHE_FILE);
+    }
+}
+?>

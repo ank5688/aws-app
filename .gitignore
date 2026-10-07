@@ -1,0 +1,45 @@
+# Configuration files with sensitive data
+# Copy the .template files and configure them for your deployment
+server2/includes/db.php
+server2/includes/fred.php
+
+# Ignore cache files
+/tmp/
+*.cache
+
+# Test file - keep in repo for setup, delete before production deployment
+# server2/test.php
+
+# Ignore IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore SSH keys
+*.pem
+*.ppk
+
+# Ignore log files
+*.log
+
+# Ignore backup files
+*.sql.bak
+*.backup
+
+# Ignore deployment archives
+*.tar.gz
+*.zip
+
+# Node modules (if any JS tooling added later)
+node_modules/
+
+# Ignore personal notes
+notes.txt
+TODO.txt
+team-info.txt

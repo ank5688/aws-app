@@ -1,0 +1,84 @@
+<?php
+/**
+ * Server 2: Database Connection to Server 3
+ * 
+ * SETUP INSTRUCTIONS:
+ * 1. Copy this file to db.php: cp db.php.template db.php
+ * 2. Update DB_HOST with Server 3's private IP address
+ * 3. Update DB_PASS with your secure database password
+ * 4. Test connection: php -r "require 'db.php'; print_r(testDatabaseConnection());"
+ */
+
+// Database configuration - UPDATE THESE VALUES
+define('DB_HOST', 'YOUR_SERVER3_PRIVATE_IP');  // Server 3's private IP (e.g., 10.0.3.10)
+define('DB_PORT', '3306');
+define('DB_NAME', 'housing_db');
+define('DB_USER', 'appuser');
+define('DB_PASS', 'YOUR_SECURE_PASSWORD_HERE');  // Change this to your actual password
+
+/**
+ * Get database connection
+ * 
+ * @return mysqli Database connection object
+ * @throws Exception if connection fails
+ */
+function getDatabase() {
+    static $connection = null;
+    
+    if ($connection === null) {
+        // Create connection
+        $connection = new mysqli(
+            DB_HOST,
+            DB_USER,
+            DB_PASS,
+            DB_NAME,
+            DB_PORT
+        );
+        
+        // Check connection
+        if ($connection->connect_error) {
+            error_log('Database connection failed: ' . $connection->connect_error);
+            throw new Exception('Unable to connect to database server');
+        }
+        
+        // Set charset
+        $connection->set_charset('utf8mb4');
+    }
+    
+    return $connection;
+}
+
+/**
+ * Test database connection
+ * Used for health checks and setup verification
+ * 
+ * @return array Connection status
+ */
+function testDatabaseConnection() {
+    try {
+        $db = getDatabase();
+        
+        return [
+            'success' => true,
+            'message' => 'Database connection successful',
+            'server_info' => $db->server_info
+        ];
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'message' => 'Database connection failed',
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+/**
+ * Close database connection
+ */
+function closeDatabase() {
+    $connection = getDatabase();
+    if ($connection) {
+        $connection->close();
+    }
+}
+?>

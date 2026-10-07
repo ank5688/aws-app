@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HomeFind - Discover Affordable Homes</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <h1>🏠 HomeFind</h1>
+                <p class="tagline">Find Your Affordable Dream Home</p>
+            </div>
+        </header>
+
+        <main>
+            <div class="search-card">
+                <h2>Search Homes in Your Budget</h2>
+                <p class="subtitle">Enter your criteria to see homes you can afford</p>
+                
+                <form id="searchForm">
+                    <div class="form-group">
+                        <label for="zipcode">Zip Code</label>
+                        <input 
+                            type="text" 
+                            id="zipcode" 
+                            name="zipcode" 
+                            pattern="[0-9]{5}" 
+                            placeholder="e.g., 90210" 
+                            required
+                            maxlength="5"
+                        >
+                        <small>5-digit U.S. zip code</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="income">Annual Income</label>
+                        <div class="input-with-prefix">
+                            <span class="prefix">$</span>
+                            <input 
+                                type="number" 
+                                id="income" 
+                                name="income" 
+                                placeholder="e.g., 75000" 
+                                required
+                                min="1"
+                                step="1"
+                            >
+                        </div>
+                        <small>Your gross annual income</small>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="bedrooms">Bedrooms</label>
+                            <select id="bedrooms" name="bedrooms" required>
+                                <option value="">Select</option>
+                                <option value="1">1 bed</option>
+                                <option value="2">2 beds</option>
+                                <option value="3" selected>3 beds</option>
+                                <option value="4">4 beds</option>
+                                <option value="5">5+ beds</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="bathrooms">Bathrooms</label>
+                            <select id="bathrooms" name="bathrooms" required>
+                                <option value="">Select</option>
+                                <option value="1">1 bath</option>
+                                <option value="2" selected>2 baths</option>
+                                <option value="2.5">2.5 baths</option>
+                                <option value="3">3 baths</option>
+                                <option value="4">4+ baths</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn-primary">
+                        <span class="btn-text">Search Homes</span>
+                        <span class="btn-icon">→</span>
+                    </button>
+                </form>
+
+                <div class="info-box">
+                    <p><strong>Affordability Calculation:</strong></p>
+                    <ul>
+                        <li>Monthly payment based on 20% down, 30-year mortgage</li>
+                        <li>Includes property tax (1.2% annually) and insurance (~$100/mo)</li>
+                        <li>Affordable if payment ≤ 28% of monthly income</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Results will be displayed here -->
+            <div id="results" class="results-container" style="display: none;">
+                <div class="results-header">
+                    <h2>Search Results</h2>
+                    <button id="newSearch" class="btn-secondary">New Search</button>
+                </div>
+                <div id="resultsContent"></div>
+            </div>
+
+            <!-- Loading spinner -->
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Searching homes and calculating affordability...</p>
+            </div>
+
+            <!-- Error message -->
+            <div id="error" class="error-message" style="display: none;">
+                <p class="error-text"></p>
+                <button id="dismissError" class="btn-secondary">Dismiss</button>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 HomeFind. Educational project for cloud computing course.</p>
+            <p><small>Mortgage rates provided by FRED API. Sample housing data for demonstration.</small></p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

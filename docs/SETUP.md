@@ -1,477 +1,433 @@
 # Setup and Deployment Guide
 
+This guide deploys HomeFind on three EC2 instances. It has been tested end to end on **Ubuntu 24.04 LTS** in an AWS Academy Learner Lab (October 2026).
+
+For a condensed version, see `QUICK_START.md` in the repo root.
+
 ## Prerequisites
 
-- 3 AWS EC2 instances (Amazon Linux 2 or Ubuntu 20.04+)
-- AWS Security Groups configured
-- SSH access to all servers
-- FRED API key (free at https://fred.stlouisfed.org/docs/api/api_key.html)
+- An AWS account or AWS Academy Learner Lab (region: us-east-1)
+- An SSH key pair. In the Learner Lab, use **AWS Details → Download PEM** to get `labsuser.pem`, which matches the key pair **vockey**.
+- A FRED API key (free at https://fred.stlouisfed.org/docs/api/api_key.html)
+- A terminal with `ssh`
+
+Before your first SSH login, protect the key file. SSH refuses keys that other users can read:
+
+```bash
+chmod 400 /path/to/labsuser.pem
+```
 
 ## Architecture Overview
 
 ```
-[Internet] 
-    ↓
-[Server 1 - Web Tier]  ← Public IP, Apache serving static files
-    ↓ HTTP
-[Server 2 - App Tier]  ← Apache + PHP, calls Server 3 and FRED API
-    ↓ MySQL
-[Server 3 - DB Tier]   ← MySQL, restricted access
+[Visitor's browser]
+        │  HTTP :80 (public)
+        ▼
+[Server 1 - Web tier]   Apache: serves index.html/styles.css/script.js
+        │                and reverse-proxies /api/* to Server 2
+        │  HTTP :80 (private network only)
+        ▼
+[Server 2 - App tier]   Apache + PHP: business logic, mortgage math
+        │  MySQL :3306 (private)        │  HTTPS :443 (outbound)
+        ▼                               ▼
+[Server 3 - DB tier]    MySQL         [FRED API]
 ```
+
+**The browser only ever talks to Server 1.** `script.js` uses relative URLs (`/api/search.php`). Server 1's Apache reverse proxy forwards those requests to Server 2 over the private network. Server 2 has no public access, so the browser can't reach it directly, and it doesn't need to.
+
+## Placeholders used in this guide
+
+| Placeholder | Meaning |
+|---|---|
+| `YOUR_KEY.pem` | Your SSH private key (Learner Lab: `labsuser.pem`) |
+| `SERVERn_PUBLIC_IP` | Public IPv4 of server n. **It changes when the Learner Lab restarts.** |
+| `SERVERn_PRIVATE_IP` | Private IPv4 of server n (172.31.x.x in the default VPC). **It stays the same.** |
+| `YOUR_IP` | Your workstation's public IP (search "what is my IP") |
+
+All server-to-server configuration uses **private** IPs, so a lab restart doesn't break the app. Only the public URL changes.
 
 ---
 
-## Server 3 Setup (Database Tier) - DO THIS FIRST
+## Step 1: Create the security groups (before launching instances)
 
-### 1. Launch EC2 Instance
-- **Instance Type**: t2.micro or t3.micro
-- **AMI**: Ubuntu 20.04 LTS
-- **Storage**: 20 GB
-- **Security Group**: 
-  - Allow MySQL (3306) from Server 2's private IP only
-  - Allow MySQL (3306) from your workstation IP (for setup/testing)
-  - Allow SSH (22) from your IP
+Security groups can name **another security group** as a source, instead of an IP address. Create them in this order so each one exists before another group refers to it.
 
-### 2. Install MySQL
+**EC2 → Security Groups → Create security group** (VPC: default). Add these rules under **Inbound**. Leave **Outbound** at the default: All traffic → 0.0.0.0/0.
+
+| Group | Type | Port | Source | Purpose |
+|---|---|---|---|---|
+| **web-tier** | SSH | 22 | My IP | Admin access |
+| | HTTP | 80 | Anywhere-IPv4 (0.0.0.0/0) | Public website |
+| **app-tier** | SSH | 22 | My IP | Admin access |
+| | HTTP | 80 | Custom → **web-tier** (security group) | Server 1 forwards API calls |
+| | HTTP | 80 | My IP | **Temporary**, for setup testing. Delete it in Step 6. |
+| **db-tier** | SSH | 22 | My IP | Admin access |
+| | MySQL/Aurora | 3306 | Custom → **app-tier** (security group) | Server 2 queries listings |
+| | MySQL/Aurora | 3306 | My IP (plus each teammate's IP/32) | Team workstation access |
+
+> **Common mistake:** adding these rules under *Outbound*. Inbound means who may connect *to* the server. Restricting outbound to only 22/80 would block `apt` (443), MySQL (3306), and the FRED API (443).
+
+---
+
+## Step 2: Launch the instances
+
+Launch all three with these settings (**EC2 → Instances → Launch instances**):
+
+| Setting | Value |
+|---|---|
+| AMI | **Ubuntu Server 24.04 LTS**, 64-bit (x86) |
+| Instance type | **t3.micro** (free tier eligible) |
+| Key pair | vockey (or your own) |
+| Network settings | **Edit → Select existing security group** → the tier's group **only**. Remove any `launch-wizard-#` group. |
+| Auto-assign public IP | Enable |
+| Storage | **10 GiB gp3** (3 × 10 = 30 GiB, the free-tier limit) |
+
+| Name | Security group |
+|---|---|
+| HomeFind-Web-Server1 | web-tier |
+| HomeFind-App-Server2 | app-tier |
+| HomeFind-DB-Server3 | db-tier |
+
+Record each server's **public** and **private** IP.
+
+---
+
+## Step 3: Server 3 (Database tier)
 
 ```bash
-# SSH into Server 3
-ssh -i your-key.pem ubuntu@server3-public-ip
+ssh -i YOUR_KEY.pem ubuntu@SERVER3_PUBLIC_IP
+```
 
-# Update system
-sudo apt update
-sudo apt upgrade -y
+### 3.1 Install MySQL
 
-# Install MySQL
-sudo apt install mysql-server -y
+```bash
+sudo apt update && sudo apt install mysql-server -y
+sudo systemctl status mysql        # expect: active (running) / "Server is operational"  (press q)
+```
 
-# Secure MySQL installation
+### 3.2 Secure the installation
+
+```bash
 sudo mysql_secure_installation
-# Set root password
-# Remove anonymous users: Y
-# Disallow root login remotely: Y
-# Remove test database: Y
-# Reload privilege tables: Y
 ```
 
-### 3. Configure MySQL for Remote Access
+| Prompt | Answer |
+|---|---|
+| VALIDATE PASSWORD component? | N |
+| Remove anonymous users? | Y |
+| Disallow root login remotely? | Y |
+| Remove test database? | Y |
+| Reload privilege tables? | Y |
+
+> On Ubuntu 24.04 you will see *"Skipping password set for root as authentication with auth_socket is used."* This is expected. Root logs in with **`sudo mysql`**, with no password and no `-p`.
+
+### 3.3 Listen on the network
+
+By default MySQL only accepts local connections. Change it to listen on all interfaces. The **security group** still decides who can actually connect.
 
 ```bash
-# Edit MySQL configuration
-sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
-
-# Find the line:
-#   bind-address = 127.0.0.1
-# Change to:
-#   bind-address = 0.0.0.0
-
-# Save and exit (Ctrl+X, Y, Enter)
-
-# Restart MySQL
+sudo sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf
 sudo systemctl restart mysql
-sudo systemctl enable mysql
+sudo ss -tlnp | grep 3306          # expect: 0.0.0.0:3306
 ```
 
-### 4. Create Database and User
+(A second line showing `127.0.0.1:33060` is MySQL's X Protocol. It's normal and can be ignored.)
+
+### 3.4 Load the schema and sample data
 
 ```bash
-# Copy SQL files to server
-# On your local machine:
-scp -i your-key.pem server3/schema.sql ubuntu@server3-ip:~/
-scp -i your-key.pem server3/sample_data.sql ubuntu@server3-ip:~/
+git clone https://github.com/ank5688/aws-app.git ~/aws-app
+sudo mysql < ~/aws-app/server3/schema.sql
+sudo mysql < ~/aws-app/server3/sample_data.sql
+sudo mysql -e "SELECT COUNT(*) FROM housing_db.listings;"    # expect: 55
+```
 
-# Back on Server 3:
-# Login to MySQL as root
-sudo mysql -u root -p
+The sample data has **55 listings**: 11 zip codes × 5 homes each.
 
-# Execute in MySQL prompt:
-source /home/ubuntu/schema.sql
-source /home/ubuntu/sample_data.sql
+### 3.5 Create IP-restricted application users
 
-# Update the application user password
-# IMPORTANT: Replace 'YourSecurePasswordHere' with a strong password
-ALTER USER 'appuser'@'%' IDENTIFIED BY 'YourSecurePasswordHere';
+`schema.sql` creates a placeholder account, `'appuser'@'%'` ("from any host"). Replace it with accounts tied to specific IPs.
 
-# Grant permissions for Server 2's private IP
-# Replace SERVER2_PRIVATE_IP with actual IP
-GRANT SELECT ON housing_db.* TO 'appuser'@'SERVER2_PRIVATE_IP' IDENTIFIED BY 'YourSecurePasswordHere';
-FLUSH PRIVILEGES;
+Generate a strong password on your workstation (`openssl rand -base64 18`) and keep it private. Then:
 
-# Verify database
-USE housing_db;
-SELECT COUNT(*) FROM listings;
-# Should show 50 listings
+```bash
+sudo mysql
+```
 
-# Exit MySQL
+```sql
+CREATE USER 'appuser'@'SERVER2_PRIVATE_IP' IDENTIFIED BY 'YOUR_PASSWORD';
+GRANT SELECT ON housing_db.listings TO 'appuser'@'SERVER2_PRIVATE_IP';
+
+CREATE USER 'appuser'@'YOUR_IP' IDENTIFIED BY 'YOUR_PASSWORD';
+GRANT SELECT ON housing_db.listings TO 'appuser'@'YOUR_IP';
+
+DROP USER 'appuser'@'%';
+
+SELECT user, host FROM mysql.user WHERE user = 'appuser';
 exit;
 ```
 
-### 5. Test Database Connection
+The final query should return exactly **two rows**, one per IP, with no `%` row.
 
-```bash
-# From Server 3, test local connection
-mysql -u appuser -p housing_db
-# Enter password when prompted
-# If successful, you'll see MySQL prompt
-
-SELECT * FROM listings LIMIT 5;
-exit;
-```
-
-**Note Server 3's Private IP**: You'll need this for Server 2 configuration.
+> **MySQL 8 note:** the older one-line syntax `GRANT ... IDENTIFIED BY ...` was removed in MySQL 8.0. Create the user first, then grant.
+>
+> **Least privilege:** the app only reads listings, so it only gets `SELECT`.
+>
+> **Adding a teammate:** repeat the `CREATE USER` + `GRANT` pair with their IP, and add a matching MySQL rule to **db-tier**.
 
 ---
 
-## Server 2 Setup (Application Tier)
-
-### 1. Launch EC2 Instance
-- **Instance Type**: t2.micro or t3.micro
-- **AMI**: Ubuntu 20.04 LTS
-- **Storage**: 20 GB
-- **Security Group**:
-  - Allow HTTP (80) from Server 1's private IP only
-  - Allow SSH (22) from your IP
-  - Ensure outbound rules allow MySQL (3306) to Server 3
-  - Ensure outbound rules allow HTTPS (443) for FRED API
-
-### 2. Install Apache and PHP
+## Step 4: Server 2 (Application tier)
 
 ```bash
-# SSH into Server 2
-ssh -i your-key.pem ubuntu@server2-public-ip
-
-# Update system
-sudo apt update
-sudo apt upgrade -y
-
-# Install Apache, PHP, and MySQL client
-sudo apt install apache2 php libapache2-mod-php php-mysql php-curl php-json -y
-
-# Enable and start Apache
-sudo systemctl enable apache2
-sudo systemctl start apache2
+ssh -i YOUR_KEY.pem ubuntu@SERVER2_PUBLIC_IP
 ```
 
-### 3. Deploy Application Files
+### 4.1 Install Apache and PHP
 
 ```bash
-# On your local machine, create deployment package
-cd server2
-tar -czf server2-app.tar.gz api/ includes/
+sudo apt update && sudo apt install apache2 php libapache2-mod-php php-mysql php-curl -y
+php -v                              # expect: PHP 8.3.x
+php -m | grep -E 'mysqli|curl'      # expect: both listed
+```
 
-# Copy to Server 2
-scp -i your-key.pem server2-app.tar.gz ubuntu@server2-ip:~/
+> Do **not** add `php-json`. JSON is built into PHP 8, and on Ubuntu 24.04 that package doesn't exist, which makes the install fail.
 
-# Back on Server 2:
-# Extract files to Apache directory
-cd /var/www/html
-sudo tar -xzf ~/server2-app.tar.gz
+### 4.2 Get the code and create the config files
+
+```bash
+git clone https://github.com/ank5688/aws-app.git ~/aws-app
+cd ~/aws-app/server2
+bash setup.sh                       # copies db.php.template → db.php, fred.php.template → fred.php
+```
+
+`db.php` and `fred.php` hold secrets and are listed in `.gitignore`. **Never commit them.**
+
+Edit `includes/db.php`:
+
+```php
+define('DB_HOST', 'SERVER3_PRIVATE_IP');
+define('DB_PASS', 'YOUR_PASSWORD');
+```
+
+Edit `includes/fred.php`:
+
+```php
+define('FRED_API_KEY', 'YOUR_FRED_API_KEY');
+```
+
+Check that the host line has no stray characters:
+
+```bash
+grep DB_HOST includes/db.php
+```
+
+### 4.3 Test each connection from the command line
+
+```bash
+php -r "require 'includes/db.php'; print_r(testDatabaseConnection());"   # expect: [success] => 1
+php -r "require 'includes/fred.php'; print_r(testFredAPI());"            # expect: a live rate
+```
+
+> If FRED reports exactly **6.75%**, that's the hard-coded fallback, which means the API call failed. Check the key.
+
+### 4.4 Deploy to Apache
+
+```bash
+sudo cp -r api includes test.php /var/www/html/
 sudo chown -R www-data:www-data /var/www/html
-sudo chmod -R 755 /var/www/html
+sudo chmod 640 /var/www/html/includes/db.php /var/www/html/includes/fred.php
 ```
 
-### 4. Configure Database Connection
+`640` keeps the password and API key readable only by Apache (`www-data`), not by every account on the server.
+
+### 4.5 Test through Apache
 
 ```bash
-# Edit db.php with Server 3 details
-sudo nano /var/www/html/includes/db.php
-
-# Update these lines:
-# define('DB_HOST', 'SERVER3_PRIVATE_IP');
-# define('DB_PASS', 'YourSecurePasswordHere');
-
-# Save and exit
+curl -s "http://localhost/api/search-json.php?zip=90210&income=100000&beds=3&baths=2" \
+  | grep -E '"success"|total_listings|affordable_count|mortgage_rate'
 ```
 
-### 5. Configure FRED API
+Expected: `"success": true`, `"total_listings": 5`, `"affordable_count": 0`.
 
-```bash
-# Get your free FRED API key from:
-# https://fred.stlouisfed.org/docs/api/api_key.html
-
-# Edit fred.php
-sudo nano /var/www/html/includes/fred.php
-
-# Update this line:
-# define('FRED_API_KEY', 'your_actual_api_key_here');
-
-# Save and exit
-
-# Create cache directory
-sudo mkdir -p /tmp
-sudo chmod 777 /tmp
-```
-
-### 6. Test Server 2
-
-```bash
-# Test database connection
-php -r "require '/var/www/html/includes/db.php'; print_r(testDatabaseConnection());"
-
-# Should show: success => true
-
-# Test FRED API
-php -r "require '/var/www/html/includes/fred.php'; print_r(testFredAPI());"
-
-# Should show current mortgage rate
-
-# Test from browser (temporarily open port 80 to your IP)
-# Visit: http://server2-public-ip/api/search.php?zip=90210&income=100000&beds=3&baths=2
-```
-
-**Note Server 2's Private IP**: You'll need this for Server 1 configuration.
+> **Known issue:** opening `test.php` in a browser shows *"JSON.parse: unexpected character at line 1 column 1."* `test.php` includes `search-json.php`, which changes the whole page's Content-Type to `application/json`. You can confirm with `curl -sI http://localhost/test.php | grep -i content-type`. The app itself is not affected, and `test.php` is deleted in Step 6.
 
 ---
 
-## Server 1 Setup (Web/Presentation Tier)
-
-### 1. Launch EC2 Instance
-- **Instance Type**: t2.micro or t3.micro
-- **AMI**: Ubuntu 20.04 LTS
-- **Storage**: 10 GB
-- **Security Group**:
-  - Allow HTTP (80) from 0.0.0.0/0 (Internet)
-  - Allow HTTPS (443) from 0.0.0.0/0 (optional, for SSL)
-  - Allow SSH (22) from your IP
-
-### 2. Install Apache
+## Step 5: Server 1 (Web tier)
 
 ```bash
-# SSH into Server 1
-ssh -i your-key.pem ubuntu@server1-public-ip
-
-# Update system
-sudo apt update
-sudo apt upgrade -y
-
-# Install Apache
-sudo apt install apache2 -y
-
-# Enable and start Apache
-sudo systemctl enable apache2
-sudo systemctl start apache2
+ssh -i YOUR_KEY.pem ubuntu@SERVER1_PUBLIC_IP
 ```
 
-### 3. Deploy Web Files
+### 5.1 Install Apache and deploy the front end
 
 ```bash
-# On your local machine
-cd server1
-tar -czf server1-web.tar.gz index.html styles.css script.js
-
-# Copy to Server 1
-scp -i your-key.pem server1-web.tar.gz ubuntu@server1-ip:~/
-
-# Back on Server 1:
-# Remove default Apache page
-sudo rm /var/www/html/index.html
-
-# Extract web files
-cd /var/www/html
-sudo tar -xzf ~/server1-web.tar.gz
-sudo chown -R www-data:www-data /var/www/html
-sudo chmod -R 755 /var/www/html
+sudo apt update && sudo apt install apache2 -y
+git clone https://github.com/ank5688/aws-app.git ~/aws-app
+sudo cp ~/aws-app/server1/index.html ~/aws-app/server1/styles.css ~/aws-app/server1/script.js /var/www/html/
 ```
 
-### 4. Configure Server 2 Connection
+`script.js` already uses `const SERVER2_URL = '';`, so it makes relative requests to `/api/...` on Server 1. **Do not** set it to Server 2's IP. Code in the visitor's browser cannot reach a private IP.
+
+### 5.2 Configure the reverse proxy
+
+`server1/homefind-proxy.conf` forwards `/api/` to Server 2. If your Server 2 private IP differs from the one in the file, update it first:
 
 ```bash
-# Edit script.js with Server 2 IP
-sudo nano /var/www/html/script.js
-
-# Update this line:
-# const SERVER2_URL = 'http://SERVER2_PRIVATE_IP';
-
-# Save and exit
+cd ~/aws-app/server1
+grep ProxyPass homefind-proxy.conf                      # check the IP
+sed -i 's/172\.31\.22\.214/SERVER2_PRIVATE_IP/g' homefind-proxy.conf   # only if it differs
 ```
 
-### 5. Test Server 1
+Install and enable it:
 
 ```bash
-# Visit in browser:
-# http://server1-public-ip
-
-# You should see the HomeFind search form
-# Try a search with:
-# Zip: 90210
-# Income: 100000
-# Beds: 3
-# Baths: 2
+sudo a2enmod proxy proxy_http
+sudo cp homefind-proxy.conf /etc/apache2/conf-available/
+sudo a2enconf homefind-proxy
+sudo apachectl configtest          # expect: Syntax OK
+sudo systemctl restart apache2
 ```
+
+> Always run `configtest` before restarting. A config error would stop Apache from starting.
+>
+> Use `sudo` for `systemctl`. Without it, Ubuntu asks for a password the `ubuntu` user doesn't have (press Ctrl+C to cancel).
+
+### 5.3 Test the full chain
+
+```bash
+curl -s "http://localhost/api/search-json.php?zip=90210&income=100000&beds=3&baths=2" \
+  | grep -E '"success"|total_listings|affordable_count'
+```
+
+Expected: the same result as on Server 2 (`true`, `5`, `0`).
+
+Then, in a browser, open `http://SERVER1_PUBLIC_IP`:
+
+- Search **90210 / 100000 / 3 beds / 2 baths**. Expect 5 listings, all **✗ Not Affordable**.
+- Click **View as JSON**. The JSON opens on **Server 1's** address.
 
 ---
 
-## Security Hardening
+## Step 6: Lock down
 
-### Server 3 (Database) Security
+1. **Delete the setup test page** (Server 2):
+   ```bash
+   sudo rm /var/www/html/test.php
+   ```
+2. **Remove the temporary rule:** EC2 → Security Groups → **app-tier** → Edit inbound rules → delete **HTTP from My IP** → Save.
 
-```bash
-# On Server 3, verify firewall rules
-sudo ufw allow from SERVER2_PRIVATE_IP to any port 3306
-sudo ufw allow from YOUR_WORKSTATION_IP to any port 3306
-sudo ufw allow 22
-sudo ufw enable
-sudo ufw status
+Final inbound rules:
 
-# Verify MySQL users
-sudo mysql -u root -p
-SELECT user, host FROM mysql.user;
-# Should only show appuser with specific IPs, not '%'
-```
+- **web-tier:** SSH from My IP · HTTP from anywhere
+- **app-tier:** SSH from My IP · HTTP from web-tier
+- **db-tier:** SSH from My IP · MySQL from app-tier · MySQL from team IPs
 
-### Server 2 (Application) Security
+### Optional: host firewall (defense in depth)
+
+Security groups are enough for this project. If you also enable `ufw`, **allow SSH before enabling it**, or you will lock yourself out:
 
 ```bash
-# On Server 2
-sudo ufw allow from SERVER1_PRIVATE_IP to any port 80
 sudo ufw allow 22
-sudo ufw allow out 3306  # To Server 3
-sudo ufw allow out 443   # For FRED API
-sudo ufw enable
-```
-
-### Server 1 (Web) Security
-
-```bash
-# On Server 1
-sudo ufw allow 80
-sudo ufw allow 443  # If using HTTPS
-sudo ufw allow 22
+sudo ufw allow from SERVER2_PRIVATE_IP to any port 3306    # Server 3 example
 sudo ufw enable
 ```
 
 ---
 
-## Testing the Complete System
+## Step 7: Verify the deployment
 
-### 1. Test Database (Server 3)
-```bash
-mysql -u appuser -p -h SERVER3_PRIVATE_IP housing_db
-SELECT COUNT(*) FROM listings;
-exit;
-```
+### Positive tests (should work)
 
-### 2. Test API (Server 2)
-```bash
-curl "http://SERVER2_PRIVATE_IP/api/search-json.php?zip=90210&income=100000&beds=3&baths=2"
-# Should return JSON with listings
-```
+| Test | Where | Expected |
+|---|---|---|
+| Row count: `sudo mysql -e "SELECT COUNT(*) FROM housing_db.listings;"` | Server 3 | 55 |
+| Browser search 90210 / 100000 / 3 / 2 | Browser → Server 1 | 5 homes, 0 affordable |
+| Browser search 85001 / 75000 / 1 / 1 | Browser → Server 1 | 5 homes, **1 affordable** ($245,000 at ≈ $1,700/mo vs. a $1,750 limit)* |
+| View as JSON | Browser → Server 1 | JSON on Server 1's address |
 
-### 3. Test Web Interface (Server 1)
-- Visit: `http://SERVER1_PUBLIC_IP`
-- Fill in the form:
-  - Zip: 90210
-  - Income: 100000
-  - Beds: 3
-  - Baths: 2
-- Click "Search Homes"
-- You should see results with affordability calculations
+\* This result depends on the live FRED rate. The $245,000 home stays affordable while the 30-year rate is below about 7.75%.
 
-### 4. Test JSON Endpoint
-- Visit: `http://SERVER2_PRIVATE_IP/api/search-json.php?zip=90210&income=100000&beds=3&baths=2`
-- Should see formatted JSON response
+### Negative tests (should fail, which proves the lockdown)
+
+| Test | Where | Expected |
+|---|---|---|
+| `curl -m 5 "http://SERVER2_PUBLIC_IP/api/search-json.php?zip=90210&income=100000&beds=3&baths=2"` | Your workstation | **Times out** |
+| `timeout 5 bash -c '</dev/tcp/SERVER3_PRIVATE_IP/3306' && echo "OPEN - problem" \|\| echo "BLOCKED - good"` | Server 1 | **BLOCKED - good** |
+
+A timeout (not an error message) is expected. Security groups silently drop blocked traffic.
 
 ---
 
 ## Troubleshooting
 
-### Can't connect to database from Server 2
+### "Unable to connect to the server" in the browser
 
-1. Check Server 3 MySQL is listening:
-   ```bash
-   sudo netstat -tlnp | grep 3306
-   ```
+`script.js` shows this message for **any** failed request, including a 404. Find the real status code:
 
-2. Test network connectivity:
-   ```bash
-   # From Server 2:
-   telnet SERVER3_PRIVATE_IP 3306
-   ```
+```bash
+# On Server 1
+curl -sI http://localhost/api/search.php | head -1
+```
 
-3. Check MySQL user permissions:
-   ```bash
-   sudo mysql -u root -p
-   SELECT user, host FROM mysql.user WHERE user='appuser';
-   ```
+- `404 Not Found`: the reverse proxy isn't enabled (Step 5.2).
+- `502`/`503`: Server 1 can't reach Server 2. Check **app-tier** allows HTTP from **web-tier**, check the IP in `homefind-proxy.conf`, and make sure Apache is running on Server 2.
 
-4. Check Security Group rules in AWS Console
+### Can't connect to the database from Server 2
+
+1. MySQL is listening on the network (Server 3): `sudo ss -tlnp | grep 3306` should show `0.0.0.0:3306`.
+2. Network path (Server 2): `timeout 5 bash -c '</dev/tcp/SERVER3_PRIVATE_IP/3306' && echo OPEN || echo BLOCKED`. If BLOCKED, check that **db-tier** allows 3306 from **app-tier**.
+3. User exists for Server 2's IP (Server 3): `sudo mysql -e "SELECT user, host FROM mysql.user WHERE user='appuser';"`
+4. Read the error carefully. `getaddrinfo ... Name or service not known` means `DB_HOST` isn't a valid IP (for example, a stray character). `Access denied` means the password or user/host doesn't match.
 
 ### FRED API not working
 
-1. Verify API key:
-   ```bash
-   curl "https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key=YOUR_KEY&file_type=json&limit=1&sort_order=desc"
-   ```
+```bash
+curl "https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key=YOUR_KEY&file_type=json&limit=1&sort_order=desc"
+php -m | grep curl
+```
 
-2. Check PHP curl extension:
-   ```bash
-   php -m | grep curl
-   ```
+A rate of exactly 6.75% in the app means the fallback is being used.
 
-3. Check cache permissions:
-   ```bash
-   ls -la /tmp/fred_rate_cache.json
-   ```
+### SSH times out
 
-### Server 1 can't reach Server 2
+Your IP probably changed (for example, you switched networks). Update the **My IP** rules in the security groups. Also check the instance is running. Learner Lab instances stop when the session ends, and their **public IPs change** on restart.
 
-1. Test from Server 1:
-   ```bash
-   curl "http://SERVER2_PRIVATE_IP/api/search-json.php?zip=90210&income=100000&beds=3&baths=2"
-   ```
+### Apache logs
 
-2. Check Apache error logs:
-   ```bash
-   # On Server 2:
-   sudo tail -f /var/log/apache2/error.log
-   ```
-
-3. Verify Security Group allows Server 1 → Server 2 on port 80
+```bash
+sudo tail -f /var/log/apache2/error.log
+sudo tail -f /var/log/apache2/access.log
+```
 
 ---
 
 ## Maintenance
 
-### Backup Database
+### Back up the database (Server 3)
 ```bash
-# On Server 3
-mysqldump -u root -p housing_db > housing_db_backup_$(date +%Y%m%d).sql
+sudo mysqldump housing_db > housing_db_backup_$(date +%Y%m%d).sql
 ```
 
-### Update Mortgage Rate Cache
+### Force a fresh mortgage rate (Server 2)
+
+Apache uses a private `/tmp`, so the simplest way to clear the cache is to restart Apache:
 ```bash
-# On Server 2, clear cache to force fresh API call
-sudo rm /tmp/fred_rate_cache.json
+sudo systemctl restart apache2
 ```
 
-### View Logs
-```bash
-# Apache access logs
-sudo tail -f /var/log/apache2/access.log
+### After a Learner Lab restart
 
-# Apache error logs
-sudo tail -f /var/log/apache2/error.log
-
-# PHP errors (if configured)
-sudo tail -f /var/log/php/error.log
-```
+- Public IPs change: share Server 1's new URL.
+- Private IPs don't change: no config edits are needed.
+- If you're on a different network, update the **My IP** rules.
 
 ---
 
-## Next Steps
+## References
 
-1. **Add SSL/HTTPS** to Server 1 using Let's Encrypt
-2. **Implement load balancing** for high availability
-3. **Add monitoring** with CloudWatch
-4. **Create AMI snapshots** for disaster recovery
-5. **Implement additional features** from requirements
-
----
-
-## Support
-
-For issues or questions, refer to:
-- MySQL documentation: https://dev.mysql.com/doc/
-- PHP documentation: https://www.php.net/docs.php
-- FRED API documentation: https://fred.stlouisfed.org/docs/api/
-- Apache documentation: https://httpd.apache.org/docs/
+- MySQL: https://dev.mysql.com/doc/
+- PHP: https://www.php.net/docs.php
+- Apache mod_proxy: https://httpd.apache.org/docs/2.4/mod/mod_proxy.html
+- FRED API: https://fred.stlouisfed.org/docs/api/

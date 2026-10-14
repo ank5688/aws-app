@@ -2,7 +2,7 @@
 // Server 1: Presentation Tier
 
 // Configuration - UPDATE THIS with your Server 2 IP address
-const SERVER2_URL = 'http://YOUR_SERVER2_IP_HERE';
+const SERVER2_URL = ''; //Relative URLs: Server 1 proxies /api/ to Server 2
 
 // DOM Elements
 const searchForm = document.getElementById('searchForm');

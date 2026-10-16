@@ -33,8 +33,6 @@ CREATE TABLE listings (
 
 -- Create application user
 -- IMPORTANT: Change the password and IP address before deployment
-CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED BY 'CHANGE_THIS_PASSWORD';
-GRANT SELECT ON housing_db.listings TO 'appuser'@'%';
 FLUSH PRIVILEGES;
 
 -- Display table structure

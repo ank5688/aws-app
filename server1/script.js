@@ -14,11 +14,20 @@ const errorDiv = document.getElementById('error');
 const errorText = document.querySelector('.error-text');
 const newSearchBtn = document.getElementById('newSearch');
 const dismissErrorBtn = document.getElementById('dismissError');
+const loadingText = document.getElementById('loadingText');
+
+// School district elements
+const schoolsBtn = document.getElementById('schoolsBtn');
+const schoolResults = document.getElementById('schoolResults');
+const schoolResultsContent = document.getElementById('schoolResultsContent');
+const closeSchoolsBtn = document.getElementById('closeSchools');
 
 // Event Listeners
 searchForm.addEventListener('submit', handleSearch);
 newSearchBtn.addEventListener('click', showSearchForm);
 dismissErrorBtn.addEventListener('click', hideError);
+schoolsBtn.addEventListener('click', handleSchoolSearch);
+closeSchoolsBtn.addEventListener('click', showSearchForm);
 
 /**
  * Handle form submission
@@ -52,7 +61,7 @@ async function handleSearch(e) {
     const apiUrl = `${SERVER2_URL}/api/search.php?zip=${zipcode}&income=${income}&beds=${bedrooms}&baths=${bathrooms}`;
     
     // Show loading state
-    showLoading();
+    showLoading('Searching homes and calculating affordability...');
     
     try {
         // Call Server 2 API
@@ -76,6 +85,122 @@ async function handleSearch(e) {
 }
 
 /**
+ * Handle the "Find School Districts" button.
+ * Uses the zip code from the search form and calls Server 2's schools.php,
+ * which is reverse-proxied through Server 1 at /api/schools.php.
+ */
+async function handleSchoolSearch() {
+    const zipcode = document.getElementById('zipcode').value;
+
+    // Validate zip code
+    if (!zipcode) {
+        showError('Please enter a zip code first, then click "Find School Districts".');
+        return;
+    }
+    if (!/^\d{5}$/.test(zipcode)) {
+        showError('Please enter a valid 5-digit zip code.');
+        return;
+    }
+
+    const apiUrl = `${SERVER2_URL}/api/schools.php?zip=${zipcode}`;
+
+    showLoading('Looking up school districts near ' + zipcode + '...');
+
+    try {
+        const response = await fetch(apiUrl);
+
+        if (!response.ok) {
+            throw new Error(`Server error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!data.success) {
+            showError(data.error || 'Unable to look up school districts for that zip code.');
+            return;
+        }
+
+        displaySchoolResults(data.data);
+
+    } catch (error) {
+        console.error('Error fetching school districts:', error);
+        showError('Unable to connect to the server. Please check your connection and try again.');
+    } finally {
+        hideLoading();
+    }
+}
+
+/**
+ * Render the school district results returned by schools.php.
+ */
+function displaySchoolResults(data) {
+    const districts = data.districts || [];
+    let html = '';
+
+    html += '<div class="results-summary">';
+    html += '<p><strong>Zip Code:</strong> ' + escapeHtml(data.zip) +
+            ' (' + escapeHtml(data.state) + ')</p>';
+    html += '<p><strong>Found:</strong> ' + districts.length + ' school district' +
+            (districts.length === 1 ? '' : 's') + ' · ' +
+            data.school_count + ' school' + (data.school_count === 1 ? '' : 's') + '</p>';
+    html += '</div>';
+
+    if (districts.length === 0) {
+        html += '<div class="no-results">';
+        html += '<h3>No school districts found</h3>';
+        html += '<p>The national school directory has no schools recorded with a physical ' +
+                'address in zip code ' + escapeHtml(data.zip) + '. Some zip codes ' +
+                '(often downtown or PO-box areas) have no schools located directly in them. ' +
+                'Try a nearby residential zip code.</p>';
+        html += '</div>';
+        schoolResultsContent.innerHTML = html;
+        revealSchoolResults();
+        return;
+    }
+
+    districts.forEach(function (d) {
+        html += '<div class="district-card">';
+        html += '<div class="district-header">';
+        html += '<span class="district-name">🏫 ' + escapeHtml(d.district_name) + '</span>';
+        html += '<span class="district-count">' + d.school_count + ' school' +
+                (d.school_count === 1 ? '' : 's') + '</span>';
+        html += '</div>';
+        html += '<div class="district-id">District ID (NCES LEAID): ' +
+                escapeHtml(d.district_id) + '</div>';
+        html += '</div>';
+    });
+
+    html += '<p class="data-attribution"><small>Data: Urban Institute Education Data Portal ' +
+            '(Common Core of Data) &amp; Zippopotam.us. School districts are those with ' +
+            'schools physically located in this zip code.</small></p>';
+
+    schoolResultsContent.innerHTML = html;
+    revealSchoolResults();
+}
+
+/**
+ * Show the school results panel.
+ */
+function revealSchoolResults() {
+    searchCard.style.display = 'none';
+    resultsContainer.style.display = 'none';
+    schoolResults.style.display = 'block';
+    schoolResults.scrollIntoView({ behavior: 'smooth' });
+}
+
+/**
+ * Minimal HTML escaper for values rendered into the page.
+ */
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
  * Display search results
  */
 function displayResults(html) {
@@ -95,6 +220,7 @@ function displayResults(html) {
 function showSearchForm() {
     searchCard.style.display = 'block';
     resultsContainer.style.display = 'none';
+    schoolResults.style.display = 'none';
     
     // Scroll to top
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -102,10 +228,15 @@ function showSearchForm() {
 
 /**
  * Show loading spinner
+ * @param {string} message - Optional message to display under the spinner
  */
-function showLoading() {
+function showLoading(message) {
+    if (loadingText && message) {
+        loadingText.textContent = message;
+    }
     searchCard.style.display = 'none';
     resultsContainer.style.display = 'none';
+    schoolResults.style.display = 'none';
     errorDiv.style.display = 'none';
     loadingDiv.style.display = 'block';
 }

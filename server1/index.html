@@ -82,6 +82,11 @@
                         <span class="btn-text">Search Homes</span>
                         <span class="btn-icon">→</span>
                     </button>
+
+                    <button type="button" id="schoolsBtn" class="btn-secondary btn-full">
+                        <span class="btn-text">🏫 Find School Districts</span>
+                    </button>
+                    <small class="helper-text">Uses the zip code above to show nearby public school districts</small>
                 </form>
 
                 <div class="info-box">
@@ -103,10 +108,19 @@
                 <div id="resultsContent"></div>
             </div>
 
+            <!-- School district results -->
+            <div id="schoolResults" class="results-container" style="display: none;">
+                <div class="results-header">
+                    <h2>🏫 School Districts</h2>
+                    <button id="closeSchools" class="btn-secondary">Back to Search</button>
+                </div>
+                <div id="schoolResultsContent"></div>
+            </div>
+
             <!-- Loading spinner -->
             <div id="loading" class="loading" style="display: none;">
                 <div class="spinner"></div>
-                <p>Searching homes and calculating affordability...</p>
+                <p id="loadingText">Searching homes and calculating affordability...</p>
             </div>
 
             <!-- Error message -->

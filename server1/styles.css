@@ -188,6 +188,16 @@ small {
     font-size: 1.3rem;
 }
 
+.btn-full {
+    width: 100%;
+    margin-top: 12px;
+}
+
+.helper-text {
+    text-align: center;
+    margin-top: 8px;
+}
+
 /* Info Box */
 .info-box {
     background: var(--background-gray);
@@ -329,6 +339,56 @@ small {
     font-size: 1.2rem;
     padding-top: 10px;
     border-top: 2px solid var(--border-color);
+}
+
+/* School District Results */
+.district-card {
+    border: 2px solid var(--border-color);
+    border-left: 4px solid var(--primary-blue);
+    border-radius: 12px;
+    padding: 20px 25px;
+    margin-bottom: 15px;
+    transition: all 0.3s ease;
+}
+
+.district-card:hover {
+    box-shadow: var(--shadow);
+    transform: translateY(-2px);
+}
+
+.district-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 8px;
+}
+
+.district-name {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--text-dark);
+}
+
+.district-count {
+    background: var(--primary-blue);
+    color: var(--white);
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.district-id {
+    color: var(--text-light);
+    font-size: 0.9rem;
+}
+
+.data-attribution {
+    margin-top: 20px;
+    text-align: center;
+    color: var(--text-light);
 }
 
 .no-results {
